@@ -8,6 +8,33 @@ const stripe = process.env.STRIPE_SECRET_KEY
   ? new Stripe(process.env.STRIPE_SECRET_KEY)
   : null;
 
+// ── Édition du profil (nom / email) ────────────────────────────────────────
+// PUT /api/users/me   body: { name, email }
+exports.updateProfile = async (req, res, next) => {
+  try {
+    const { name, email } = req.body;
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (email !== undefined) updates.email = email.toLowerCase().trim();
+
+    if (Object.keys(updates).length === 0) {
+      return error(res, "No fields to update", 400);
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    ).select("-password");
+    if (!user) return error(res, "User not found", 404);
+
+    success(res, { user }, "Profile updated");
+  } catch (err) {
+    if (err.code === 11000) return error(res, "Email already in use", 400);
+    next(err);
+  }
+};
+
 // ── Préférences / Sécurité du compte / Confidentialité localisation ───────
 // GET /api/users/me/settings
 exports.getSettings = async (req, res, next) => {

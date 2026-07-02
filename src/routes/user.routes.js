@@ -6,6 +6,9 @@ const userController = require("../controllers/user.controller");
 // Every route below requires a valid Bearer token (see auth.middleware.js)
 router.use(auth);
 
+// ── Édition du profil ────────────────────────────────────────────────────
+router.put("/me", userController.updateProfile);
+
 // ── Préférences / Sécurité du compte / Confidentialité localisation ───────
 router.get("/me/settings", userController.getSettings);
 router.patch("/me/settings", userController.updateSettings);
