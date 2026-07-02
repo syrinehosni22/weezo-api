@@ -2,11 +2,29 @@ const User = require("../models/User");
 const { hashPassword, comparePassword } = require("../utils/hash");
 const { generateToken } = require("../utils/jwt");
 const { success, error } = require("../utils/response");
+const { getDeviceIdentity } = require("../utils/deviceInfo"); // ← nouveau
 const bcrypt = require("bcryptjs");
 const EmailVerification = require("../models/EmailVerification");
 const sendVerificationEmail = require("../utils/sendVerificationEmail");
 const generateOTP = require("../utils/generateOTP");
 
+// Marks the requesting device as "current" in user.devices, used by the
+// "Appareils connectés" screen. Called from register/login.
+function registerDevice(user, req) {
+  const identity = getDeviceIdentity(req);
+  user.devices = user.devices || [];
+  user.devices.forEach((d) => (d.current = false));
+
+  const existing = user.devices.find((d) => d.deviceId === identity.deviceId);
+  if (existing) {
+    existing.lastActive = new Date();
+    existing.current = true;
+    existing.name = identity.name;
+    existing.location = identity.location;
+  } else {
+    user.devices.push({ ...identity, lastActive: new Date(), current: true });
+  }
+}
 
 // REGISTER
 exports.register = async (req, res, next) => {
@@ -25,6 +43,9 @@ exports.register = async (req, res, next) => {
       email,
       password: hashed,
     });
+
+    registerDevice(user, req);
+    await user.save();
 
     // Generate token
     const token = generateToken({ id: user._id, role: user.role, email: user.email });
@@ -45,6 +66,9 @@ exports.login = async (req, res, next) => {
 
     const isMatch = await comparePassword(password, user.password);
     if (!isMatch) return error(res, "Invalid credentials", 401);
+
+    registerDevice(user, req);
+    await user.save();
 
     const token = generateToken({ id: user._id, role: user.role, email: user.email });
 
