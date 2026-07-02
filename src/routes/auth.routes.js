@@ -7,6 +7,8 @@ const auth = require("../middlewares/auth.middleware");
 router.post("/register", authController.register);
 router.post("/login", authController.login);
 router.post("/reset-password", authController.resetPassword);
+router.get("/reset-password/:token", authController.resetPasswordForm);
+router.post("/reset-password/:token", authController.resetPasswordConfirm);
 router.post("/send-code", authController.sendCode);
 router.post("/verify-code", authController.verifyCode);
 

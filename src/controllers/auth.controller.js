@@ -1,12 +1,20 @@
 const User = require("../models/User");
+const PasswordReset = require("../models/PasswordReset");
 const { hashPassword, comparePassword } = require("../utils/hash");
 const { generateToken } = require("../utils/jwt");
 const { success, error } = require("../utils/response");
-const { getDeviceIdentity } = require("../utils/deviceInfo"); // ← nouveau
+const { getDeviceIdentity } = require("../utils/deviceInfo");
+const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const EmailVerification = require("../models/EmailVerification");
 const sendVerificationEmail = require("../utils/sendVerificationEmail");
+const sendPasswordResetEmail = require("../utils/sendPasswordResetEmail");
 const generateOTP = require("../utils/generateOTP");
+
+// weezo-api's public URL, used to build the link inside the reset email.
+// Set PUBLIC_URL in your .env once you have a real domain — falls back to
+// the current server IP otherwise.
+const PUBLIC_URL = process.env.PUBLIC_URL || "http://92.222.243.150:5000";
 
 // Marks the requesting device as "current" in user.devices, used by the
 // "Appareils connectés" screen. Called from register/login.
@@ -90,15 +98,100 @@ exports.me = async (req, res, next) => {
   }
 };
 
-// RESET PASSWORD (simple email simulation)
+// RESET PASSWORD — step 1: request a link
 exports.resetPassword = async (req, res, next) => {
   try {
     const { email } = req.body;
     const user = await User.findOne({ email });
-    if (!user) return error(res, "User not found", 404);
+    // Always respond success even if the user doesn't exist — avoids
+    // leaking which emails are registered. We only actually send an email
+    // when the account is real.
+    if (!user) return success(res, {}, "Reset password link sent to email");
 
-    // TODO: send reset link via email
+    await PasswordReset.deleteMany({ email });
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+    await PasswordReset.create({
+      email,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
+    });
+
+    const resetUrl = `${PUBLIC_URL}/api/auth/reset-password/${rawToken}`;
+    await sendPasswordResetEmail(email, resetUrl);
+
     success(res, {}, "Reset password link sent to email");
+  } catch (err) {
+    next(err);
+  }
+};
+
+// RESET PASSWORD — step 2a: serve a minimal page to enter the new password
+// GET /api/auth/reset-password/:token
+exports.resetPasswordForm = async (req, res) => {
+  const { token } = req.params;
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const record = await PasswordReset.findOne({ tokenHash });
+
+  if (!record || record.expiresAt < new Date()) {
+    return res.status(400).send(`
+      <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2>Lien invalide ou expiré</h2>
+        <p>Redemandez un lien de réinitialisation depuis l'application.</p>
+      </body></html>
+    `);
+  }
+
+  res.send(`
+    <html><body style="font-family:sans-serif;max-width:400px;margin:60px auto;padding:0 20px">
+      <h2>Nouveau mot de passe</h2>
+      <form method="POST" action="/api/auth/reset-password/${token}">
+        <input type="password" name="password" placeholder="Nouveau mot de passe"
+               minlength="6" required
+               style="width:100%;padding:12px;margin:10px 0;box-sizing:border-box" />
+        <button type="submit"
+                style="width:100%;padding:12px;background:#4A90E2;color:#fff;
+                       border:none;border-radius:6px;font-size:16px">
+          Valider
+        </button>
+      </form>
+    </body></html>
+  `);
+};
+
+// RESET PASSWORD — step 2b: consume the token, set the new password
+// POST /api/auth/reset-password/:token
+exports.resetPasswordConfirm = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const { password } = req.body;
+
+    if (!password || password.length < 6) {
+      return res.status(400).send("Mot de passe trop court (6 caractères minimum).");
+    }
+
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+    const record = await PasswordReset.findOne({ tokenHash });
+
+    if (!record || record.expiresAt < new Date()) {
+      return res.status(400).send("Lien invalide ou expiré.");
+    }
+
+    const user = await User.findOne({ email: record.email });
+    if (!user) return res.status(404).send("Utilisateur introuvable.");
+
+    user.password = await hashPassword(password);
+    await user.save();
+    await PasswordReset.deleteOne({ _id: record._id });
+
+    res.send(`
+      <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2>Mot de passe mis à jour ✅</h2>
+        <p>Vous pouvez retourner sur l'application et vous reconnecter.</p>
+      </body></html>
+    `);
   } catch (err) {
     next(err);
   }

@@ -5,6 +5,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // ← nouveau, pour le formulaire HTML de reset password
 
 // Routes
 app.use("/api/auth", require("./routes/auth.routes"));
